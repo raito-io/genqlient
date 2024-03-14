@@ -257,18 +257,18 @@ func (g *generator) convertType(
 			oe := true
 			options.Omitempty = &oe
 		}
-	} else if !options.PointerIsFalse() && (options.GetPointer() || (!typ.NonNull && g.Config.Optional == "pointer")) {
-		// Whatever we get, wrap it in a pointer.  (Because of the way the
-		// options work, recursing here isn't as connvenient.)
-		// Note this does []*T or [][]*T, not e.g. *[][]T.  See #16.
-		goTyp = &goPointerType{goTyp}
-	} else if !options.PointerIsFalse() && (options.GetPointer() || (!typ.NonNull && g.Config.Optional == "pointer_omitempty")) {
+	} else if !options.PointerIsFalse() && (options.GetPointer() || !typ.NonNull) && g.Config.Optional == "pointer_omitempty" {
 		goTyp = &goPointerType{Elem: goTyp}
 
 		if options.Omitempty == nil {
 			oe := true
 			options.Omitempty = &oe
 		}
+	} else if !options.PointerIsFalse() && (options.GetPointer() || (!typ.NonNull && g.Config.Optional == "pointer")) {
+		// Whatever we get, wrap it in a pointer.  (Because of the way the
+		// options work, recursing here isn't as connvenient.)
+		// Note this does []*T or [][]*T, not e.g. *[][]T.  See #16.
+		goTyp = &goPointerType{goTyp}
 	} else if !typ.NonNull && g.Config.Optional == "generic" {
 		var genericRef string
 		genericRef, err = g.ref(g.Config.OptionalGenericType)
@@ -685,7 +685,7 @@ func (g *generator) convertSelectionSet(
 // the fragment's type.  This is distinct from the rules for when a fragment
 // spread is legal, which is true when the fragment would be active for *any*
 // of the concrete types the spread-context could have (see the [GraphQL spec]
-// or docs/DESIGN.md).
+// or docs/design.md).
 //
 // containingTypedef is as described in convertInlineFragment, below.
 // fragmentTypedef is the definition of the fragment's type-condition, i.e. the
@@ -708,6 +708,17 @@ func fragmentMatches(containingTypedef, fragmentTypedef *ast.Definition) bool {
 			return true
 		}
 	}
+
+	// Handle the special case where the fragment is on a union, then the
+	// fragment can match any of the types in the union.
+	if fragmentTypedef.Kind == ast.Union {
+		for _, typeName := range fragmentTypedef.Types {
+			if typeName == containingTypedef.Name {
+				return true
+			}
+		}
+	}
+
 	return false
 }
 
@@ -722,7 +733,7 @@ func fragmentMatches(containingTypedef, fragmentTypedef *ast.Definition) bool {
 //
 // In general, we treat such fragments' fields as if they were fields of the
 // parent selection-set (except of course they are only included in types the
-// fragment matches); see docs/DESIGN.md for more.
+// fragment matches); see docs/design.md for more.
 func (g *generator) convertInlineFragment(
 	namePrefix *prefixList,
 	fragment *ast.InlineFragment,
@@ -837,6 +848,8 @@ func (g *generator) convertNamedFragment(fragment *ast.FragmentDefinition) (goTy
 		return goType, nil
 	case ast.Interface, ast.Union:
 		implementationTypes := g.schema.GetPossibleTypes(typ)
+		// Make sure we generate stable output by sorting the types by name when we get them
+		sort.Slice(implementationTypes, func(i, j int) bool { return implementationTypes[i].Name < implementationTypes[j].Name })
 		goType := &goInterfaceType{
 			GoName:          fragment.Name,
 			SharedFields:    fields,
